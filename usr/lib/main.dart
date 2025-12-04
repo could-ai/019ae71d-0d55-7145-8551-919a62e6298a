@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,117 +9,319 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Calculadora Avícola',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+        useMaterial3: true,
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Colors.grey.shade100,
+        ),
       ),
       initialRoute: '/',
       routes: {
-        '/': (context) => const MyHomePage(title: 'Flutter Demo Home Page'),
+        '/': (context) => const ChickenCalculatorScreen(),
       },
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ChickenCalculatorScreen extends StatefulWidget {
+  const ChickenCalculatorScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ChickenCalculatorScreen> createState() => _ChickenCalculatorScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ChickenCalculatorScreenState extends State<ChickenCalculatorScreen> {
+  // Controladores para los campos de texto
+  final TextEditingController _loadedWeightController = TextEditingController();
+  final TextEditingController _emptyWeightController = TextEditingController();
+  final TextEditingController _chickenCountController = TextEditingController();
 
-  void _incrementCounter() {
+  // Variables para el cálculo
+  double? _netWeightTotal;
+  double? _averageWeightPerChicken;
+
+  // Variables para reconocimiento de voz
+  late stt.SpeechToText _speech;
+  bool _isListening = false;
+  bool _speechAvailable = false;
+  String _currentLocaleId = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _speech = stt.SpeechToText();
+    _initSpeech();
+  }
+
+  // Inicializar el servicio de voz
+  void _initSpeech() async {
+    try {
+      bool available = await _speech.initialize(
+        onStatus: (status) => debugPrint('Speech Status: $status'),
+        onError: (errorNotification) => debugPrint('Speech Error: $errorNotification'),
+      );
+      if (mounted) {
+        setState(() {
+          _speechAvailable = available;
+        });
+        // Intentar obtener locales en español si es posible, sino usa el del sistema
+        var locales = await _speech.locales();
+        var systemLocale = await _speech.systemLocale();
+        _currentLocaleId = systemLocale?.localeId ?? '';
+        
+        // Buscar español preferentemente
+        for(var locale in locales) {
+            if(locale.localeId.toLowerCase().contains('es')) {
+                _currentLocaleId = locale.localeId;
+                break;
+            }
+        }
+      }
+    } catch (e) {
+      debugPrint("Error inicializando voz: $e");
+    }
+  }
+
+  // Función para escuchar y escribir en un controlador específico
+  void _listenToField(TextEditingController controller) async {
+    if (!_speechAvailable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El reconocimiento de voz no está disponible o permisos denegados.')),
+      );
+      return;
+    }
+
+    if (_isListening) {
+      _speech.stop();
+      setState(() => _isListening = false);
+    } else {
+      setState(() => _isListening = true);
+      _speech.listen(
+        localeId: _currentLocaleId,
+        onResult: (result) {
+          setState(() {
+            // Intentamos limpiar el texto para obtener solo números
+            String text = result.recognizedWords;
+            // Reemplazar comas por puntos para decimales si es necesario
+            text = text.replaceAll(',', '.');
+            // Extraer solo números y puntos
+            String numbersOnly = text.replaceAll(RegExp(r'[^0-9.]'), '');
+            
+            controller.text = numbersOnly;
+            
+            if (result.finalResult) {
+              _isListening = false;
+              _calculate(); // Recalcular automáticamente al terminar de hablar
+            }
+          });
+        },
+      );
+    }
+  }
+
+  void _calculate() {
+    // Obtener valores, si están vacíos usar 0
+    double loaded = double.tryParse(_loadedWeightController.text) ?? 0;
+    double empty = double.tryParse(_emptyWeightController.text) ?? 0;
+    int count = int.tryParse(_chickenCountController.text) ?? 0;
+
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      if (loaded > 0 && empty >= 0 && count > 0) {
+        _netWeightTotal = loaded - empty;
+        _averageWeightPerChicken = _netWeightTotal! / count;
+      } else {
+        _netWeightTotal = null;
+        _averageWeightPerChicken = null;
+      }
+    });
+  }
+
+  void _clearAll() {
+    _loadedWeightController.clear();
+    _emptyWeightController.clear();
+    _chickenCountController.clear();
+    setState(() {
+      _netWeightTotal = null;
+      _averageWeightPerChicken = null;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Calculadora de Peso Avícola', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.teal,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            onPressed: _clearAll,
+            tooltip: 'Limpiar todo',
+          )
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text('$_counter', style: Theme.of(context).textTheme.headlineMedium),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Ingrese los datos del camión',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal),
+            ),
+            const SizedBox(height: 20),
+            
+            // Campo: Peso Cargado
+            _buildInputCard(
+              label: 'Peso Cargado (kg)',
+              icon: FontAwesomeIcons.truckMoving,
+              controller: _loadedWeightController,
+              color: Colors.blue.shade100,
+            ),
+            
+            const SizedBox(height: 15),
+
+            // Campo: Peso Vacío
+            _buildInputCard(
+              label: 'Peso Vacío / Tara (kg)',
+              icon: FontAwesomeIcons.truck,
+              controller: _emptyWeightController,
+              color: Colors.orange.shade100,
+            ),
+
+            const SizedBox(height: 15),
+
+            // Campo: Cantidad de Pollos
+            _buildInputCard(
+              label: 'Cantidad de Pollos',
+              icon: FontAwesomeIcons.kiwiBird,
+              controller: _chickenCountController,
+              isInteger: true,
+              color: Colors.green.shade100,
+            ),
+
+            const SizedBox(height: 30),
+
+            ElevatedButton(
+              onPressed: _calculate,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              child: const Text('CALCULAR'),
+            ),
+
+            const SizedBox(height: 30),
+
+            // Resultados
+            if (_netWeightTotal != null && _averageWeightPerChicken != null) ...[
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                color: Colors.teal.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    children: [
+                      _buildResultRow('Peso Neto Total:', '${_netWeightTotal!.toStringAsFixed(2)} kg'),
+                      const Divider(),
+                      const SizedBox(height: 10),
+                      const Text('Peso Promedio por Pollo', style: TextStyle(fontSize: 16, color: Colors.grey)),
+                      const SizedBox(height: 5),
+                      Text(
+                        '${_averageWeightPerChicken!.toStringAsFixed(3)} kg',
+                        style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.teal),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      floatingActionButton: _isListening 
+        ? FloatingActionButton(
+            onPressed: () {
+              _speech.stop();
+              setState(() => _isListening = false);
+            },
+            backgroundColor: Colors.red,
+            child: const Icon(Icons.mic_off),
+          ) 
+        : null,
+    );
+  }
+
+  Widget _buildInputCard({
+    required String label,
+    required IconData icon,
+    required TextEditingController controller,
+    required Color color,
+    bool isInteger = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 5, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 60,
+            height: 80,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: const BorderRadius.only(topLeft: Radius.circular(15), bottomLeft: Radius.circular(15)),
+            ),
+            child: Icon(icon, color: Colors.black54, size: 28),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15.0),
+              child: TextField(
+                controller: controller,
+                keyboardType: TextInputType.numberWithOptions(decimal: !isInteger),
+                onChanged: (_) => _calculate(), // Cálculo en tiempo real opcional
+                decoration: InputDecoration(
+                  labelText: label,
+                  border: InputBorder.none,
+                  fillColor: Colors.transparent,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: Icon(_isListening ? Icons.mic_none : Icons.mic, color: Colors.teal),
+            onPressed: () => _listenToField(controller),
+            tooltip: 'Dictar valor',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }
